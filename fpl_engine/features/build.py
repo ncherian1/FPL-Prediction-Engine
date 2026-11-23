@@ -25,13 +25,15 @@ DC_THRESHOLD = {"GKP": np.inf, "DEF": 10, "MID": 12, "FWD": 12}
 class FeatureConfig:
     windows: tuple[int, ...] = (3, 5, 10)        # last-N squad fixtures (0-minute fixtures included)
     rate_windows: tuple[int, ...] = (5, 10)      # windows for per-90 rates
-    ewm_halflives: tuple[float, ...] = (5.0,)    # exponentially weighted per-90 rates, in fixtures
+    ewm_halflives: tuple[float, ...] = (5.0, 10.0, 20.0)   # exponentially weighted per-90 rates, in fixtures
     # shrinkage toward the position average, in minutes of "benefit of the doubt" (notebook 02 decision):
     # 540 for attacking/scoring stats, 90 for defensive counts (many actions per match -> reliable quickly)
     shrink_minutes: dict = field(default_factory=lambda: {"default": 540.0, "dc": 90.0})
     absence_cap_days: float = 60.0               # days_since_last is capped here; longer gaps set a flag
     prior_season: str = "2021-22"                # position priors come from this warm-up season only
     rate_stats: tuple[str, ...] = ("xg", "xa", "xgi", "dc", "bonus", "bps", "points")
+    # extra per-match stats whose windowed SUMS are exposed (only if the column exists), e.g. for shares
+    sum_stats: tuple[str, ...] = ("goals", "assists", "team_xg_on")
     extra: dict = field(default_factory=dict)
 
 
@@ -103,6 +105,8 @@ def position_priors(df: pd.DataFrame, cfg: FeatureConfig) -> pd.DataFrame:
 
 def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.DataFrame:
     cfg = cfg or FeatureConfig()
+    extra_sums = tuple(c for c in cfg.sum_stats if c in df.columns and c not in cfg.rate_stats)
+    all_stats = tuple(cfg.rate_stats) + extra_sums
     df = df.sort_values(["player_id", "kickoff_time", "fixture_id"]).reset_index(drop=True)
     priors = position_priors(df, cfg)
 
@@ -110,7 +114,7 @@ def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.Dat
     d["played"] = (d.minutes > 0).astype(float)
     d["start60"] = (d.minutes >= 60).astype(float)
     d["mins90"] = d.minutes / 90
-    for s in cfg.rate_stats:
+    for s in all_stats:
         d[f"_{s}"] = d[s].where(d.minutes > 0, 0.0)          # stat only counts when he played
 
     g = d.groupby("player_id", sort=False)
@@ -124,15 +128,15 @@ def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.Dat
         roll[f"n_l{n}"] = g.minutes.rolling(n, min_periods=1).count().reset_index(level=0, drop=True)
     roll["mins_l1"] = d.minutes
     for n in cfg.rate_windows:
-        cols = ["mins90"] + [f"_{s}" for s in cfg.rate_stats]
+        cols = ["mins90"] + [f"_{s}" for s in all_stats]
         sums = g[cols].rolling(n, min_periods=1).sum().reset_index(level=0, drop=True)
-        for s in cfg.rate_stats:
+        for s in all_stats:
             roll[f"{s}_sum_l{n}"] = sums[f"_{s}"]
         roll[f"mins90_sum_l{n}"] = sums.mins90
     for hl in cfg.ewm_halflives:
-        cols = ["mins90"] + [f"_{s}" for s in cfg.rate_stats]
+        cols = ["mins90"] + [f"_{s}" for s in all_stats]
         e = g[cols].transform(lambda x: x.ewm(halflife=hl, ignore_na=True).mean())
-        for s in cfg.rate_stats:
+        for s in all_stats:
             roll[f"{s}_ewm{int(hl)}_num"] = e[f"_{s}"]
         roll[f"mins90_ewm{int(hl)}"] = e.mins90
     # per-match points (baselines): bench games count as 0, so rotation risk is priced in
@@ -161,7 +165,7 @@ def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.Dat
         sm = cfg.shrink_minutes if isinstance(cfg.shrink_minutes, dict) else {"default": cfg.shrink_minutes}
         return sm.get(stat, sm.get("default", 540.0)) / 90
 
-    out = pd.DataFrame(index=d.index)
+    out: dict[str, pd.Series] = {}          # collect columns, build the frame once (avoids fragmentation)
     for c in [c for c in feats if c.startswith(("mins_l", "apps_l", "starts_l", "n_l", "ptsmatch_", "fpl_form"))]:
         out[c] = feats[c]
     for s in cfg.rate_stats:
@@ -176,6 +180,18 @@ def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.Dat
             n_eff = 1 / (1 - 0.5 ** (1 / hl))
             num, den = feats[f"{s}_ewm{int(hl)}_num"] * n_eff, feats[f"mins90_ewm{int(hl)}"] * n_eff
             out[f"{s}90_ewm{int(hl)}"] = (num + k * prior) / (den + k)
+    # windowed sums (per match, pre-deadline) for share-type features built elsewhere
+    for n in cfg.rate_windows:
+        out[f"mins90_sum_l{n}"] = feats[f"mins90_sum_l{n}"]
+        for s in ("xg", "xa") + extra_sums:
+            if f"{s}_sum_l{n}" in feats:
+                out[f"{s}_sum_l{n}"] = feats[f"{s}_sum_l{n}"]
+    for hl in cfg.ewm_halflives:
+        n_eff = 1 / (1 - 0.5 ** (1 / hl))
+        out[f"mins90_sum_ewm{int(hl)}"] = feats[f"mins90_ewm{int(hl)}"] * n_eff
+        for s in ("xg", "xa") + extra_sums:
+            if f"{s}_ewm{int(hl)}_num" in feats:
+                out[f"{s}_sum_ewm{int(hl)}"] = feats[f"{s}_ewm{int(hl)}_num"] * n_eff
     gap = (d.kickoff_time - feats.last_kickoff).dt.total_seconds() / 86400
     out["days_since_last"] = gap.clip(upper=cfg.absence_cap_days)
     out["long_absence"] = (gap > cfg.absence_cap_days).astype(float)     # long injury, new signing, summer break
@@ -194,13 +210,13 @@ def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.Dat
     blk["prior"] = blk.groupby(["player_id", "team_id"]).n.cumsum() - blk.n
     out["fixtures_at_club"] = d[["player_id", "team_id", "gw_key"]].merge(
         blk, on=["player_id", "team_id", "gw_key"], how="left").prior.to_numpy()
-    out["new_at_club"] = (out.fixtures_at_club < 5).astype(float)
+    out["new_at_club"] = pd.Series(out["fixtures_at_club"] < 5, index=d.index).astype(float)
     out["gw_of_season"] = d.gameweek.astype(float)
 
     ids = d[["player_id", "fixture_id", "season", "gameweek", "gw_key", "deadline", "kickoff_time", "team_id",
              "opponent_team_id", "position"]]
     y = d[["minutes", "points", "fpl_points", "goals", "assists", "clean_sheet", "bonus", "dc", "saves"]].add_prefix("y_")
-    return pd.concat([ids, out, y], axis=1)
+    return pd.concat([ids, pd.DataFrame(out, index=d.index), y], axis=1)
 
 
 def rotation_relevant(f: pd.DataFrame) -> pd.Series:
