@@ -100,3 +100,24 @@ def metrics(gw: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
 def by_group(gw: pd.DataFrame, col: str, population: str = "rotation-relevant") -> pd.DataFrame:
     d = gw[gw.rotation_relevant] if population == "rotation-relevant" else gw
     return d.assign(ae=(d.xpts - d.y_points).abs()).pivot_table(index=col, columns="model", values="ae", aggfunc="mean")
+
+
+def rolling_component(f: pd.DataFrame, factory, rows, eval_from: str = "2024-25", retrain_every: int = 5,
+                      first_train_season: str = "2022-23", predict=None) -> pd.DataFrame:
+    """Rolling-origin evaluation for a single component model.
+
+    factory() -> unfitted model with .fit(train) returning self; rows(df) -> boolean mask of rows to evaluate;
+    predict(model, test) -> DataFrame/Series (defaults to model.predict(test))."""
+    f = f[f.season >= first_train_season]
+    keys = sorted(f.loc[f.season >= eval_from, "gw_key"].unique())
+    out, model = [], None
+    for i, g in enumerate(keys):
+        if i % retrain_every == 0:
+            model = factory()
+            fitted = model.fit(f[f.gw_key < g])
+            model = fitted if fitted is not None else model
+        test = f[(f.gw_key == g) & rows(f)]
+        p = predict(model, test) if predict else model.predict(test)
+        p = p.to_frame("pred") if isinstance(p, pd.Series) else p
+        out.append(pd.concat([test, p], axis=1))
+    return pd.concat(out)
