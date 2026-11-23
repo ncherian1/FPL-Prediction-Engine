@@ -28,10 +28,10 @@ class FeatureConfig:
     ewm_halflives: tuple[float, ...] = (5.0, 10.0, 20.0)   # exponentially weighted per-90 rates, in fixtures
     # shrinkage toward the position average, in minutes of "benefit of the doubt" (notebook 02 decision):
     # 540 for attacking/scoring stats, 90 for defensive counts (many actions per match -> reliable quickly)
-    shrink_minutes: dict = field(default_factory=lambda: {"default": 540.0, "dc": 90.0})
+    shrink_minutes: dict = field(default_factory=lambda: {"default": 540.0, "dc": 90.0, "saves": 90.0})
     absence_cap_days: float = 60.0               # days_since_last is capped here; longer gaps set a flag
     prior_season: str = "2021-22"                # position priors come from this warm-up season only
-    rate_stats: tuple[str, ...] = ("xg", "xa", "xgi", "dc", "bonus", "bps", "points")
+    rate_stats: tuple[str, ...] = ("xg", "xa", "xgi", "dc", "bonus", "bps", "points", "saves", "yellow_cards")
     # extra per-match stats whose windowed SUMS are exposed (only if the column exists), e.g. for shares
     sum_stats: tuple[str, ...] = ("goals", "assists", "team_xg_on")
     extra: dict = field(default_factory=dict)
