@@ -254,6 +254,10 @@ def sync_bootstrap(conn: psycopg.Connection) -> str:
                       ["source_name", "source_player_id", "(COALESCE(season, ''))"], update=[])
             run.add("price_history", db.insert(conn, "core.player_price_history", r["prices"]))
             run.add("availability_changes", db.insert(conn, "core.player_availability", changed_availability))
+            from ..scoring import rules_from_game_config, save_rules
+            scoring = resp.json().get("game_config", {}).get("scoring")
+            if scoring:
+                save_rules(conn, rules_from_game_config(season, scoring))
         log.info("bootstrap %s: %s", season, run.details)
         return season
 

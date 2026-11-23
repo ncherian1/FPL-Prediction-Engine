@@ -81,6 +81,10 @@ def cmd_daily(conn, args):
     from .config import get_settings
     if get_settings().pitchapi_key:
         pitchapi.sync_season(conn, season)
+        from . import matching
+        matching.run(conn, write=True)          # link any new players / fixtures
+        matching.build_defensive(conn)
+        matching.build_adjustments(conn)
     paths = reports.write_all(conn)
     print("reports:", *paths.values(), sep="\n  ")
 
@@ -95,6 +99,28 @@ def cmd_backfill(conn, args):
     for y in range(vaastav.FIRST_SEASON, current + 1):
         football_data.import_season(conn, y, is_current=(y == current))
     fpl_api.sync_player_histories(conn, season)
+
+
+def cmd_seed_scoring_rules(conn, args):
+    from .scoring import seed_rules
+    with fpl_api.fetcher(conn) as f:
+        scoring = f.get("/bootstrap-static/").json().get("game_config", {}).get("scoring")
+    print("scoring rules stored for:", ", ".join(seed_rules(conn, scoring)))
+
+
+def cmd_match_players(conn, args):
+    from . import matching
+    r = matching.run(conn, write=True)
+    d = r["decisions"]
+    print(d.tier.value_counts().to_string())
+    out = reports.REPORT_DIR / "player_matching_review.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    review = d[(~d.tier.isin(matching.ACCEPT) & d.tier.ne("X_manual_unmatched"))
+               | d.conflict.fillna(False).astype(bool)]
+    review.to_csv(out, index=False)
+    print(f"review list ({len(review)}):", out)
+    print("defensive rows from PitchAPI:", matching.build_defensive(conn))
+    matching.build_adjustments(conn)
 
 
 def cmd_report(conn, args):
@@ -150,6 +176,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("daily", help="scheduled daily job").set_defaults(fn=cmd_daily)
     sub.add_parser("backfill", help="one-off full historical load (keyless sources)").set_defaults(fn=cmd_backfill)
     sub.add_parser("report", help="freshness + missing-field reports").set_defaults(fn=cmd_report)
+    sub.add_parser("match-players", help="link PitchAPI teams/fixtures/players to FPL IDs").set_defaults(
+        fn=cmd_match_players)
+    sub.add_parser("seed-scoring-rules", help="store FPL scoring rules for every season").set_defaults(
+        fn=cmd_seed_scoring_rules)
 
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
