@@ -1,0 +1,19 @@
+# Local PostgreSQL for development. In production point DATABASE_URL at Supabase instead.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fpl
+      POSTGRES_PASSWORD: fpl
+      POSTGRES_DB: fpl
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fpl -d fpl"]
+      interval: 5s
+      retries: 10
+volumes:
+  pgdata:
