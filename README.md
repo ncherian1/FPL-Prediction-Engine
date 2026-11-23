@@ -53,6 +53,8 @@ The FPL API publishes per-match xG, xA, xGI, xGC, CBI, recoveries, tackles and `
 
 ## Database layout
 
+See **[docs/schema.md](docs/schema.md)** for the entity-relationship diagram and a guide to every table.
+
 `sql/001_init.sql` holds the full schema and its comments.
 
 - **raw**: `source_snapshots` records every HTTP request: endpoint, params, status, sha256 and archive path. Response bodies are stored gzipped and content-addressed under `ARCHIVE_DIR`. `fpl_live_gameweek`, `football_data_matches` and `provider_records` hold provider data whose coverage hasn't been validated yet.
