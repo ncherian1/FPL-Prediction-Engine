@@ -135,6 +135,16 @@ def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.Dat
         for s in cfg.rate_stats:
             roll[f"{s}_ewm{int(hl)}_num"] = e[f"_{s}"]
         roll[f"mins90_ewm{int(hl)}"] = e.mins90
+    # per-match points (baselines): bench games count as 0, so rotation risk is priced in
+    for n in cfg.windows:
+        roll[f"ptsmatch_l{n}"] = g.points.rolling(n, min_periods=1).mean().reset_index(level=0, drop=True)
+    sg = d.groupby(["player_id", "season"], sort=False).points
+    roll["ptsmatch_season"] = sg.cumsum() / (sg.cumcount() + 1)   # at a season's first GW this carries last season's
+    # official-style FPL form: mean official points per APPEARANCE over the last 30 days
+    played_pts = d.fpl_points.where(d.minutes > 0)
+    form = (pd.DataFrame({"player_id": d.player_id, "kickoff_time": d.kickoff_time, "v": played_pts})
+            .set_index("kickoff_time").groupby("player_id", sort=False).v.rolling("30D", min_periods=1).mean())
+    roll["fpl_form30"] = form.to_numpy()                          # same (player, kickoff) order as d
     roll["last_kickoff"] = d.kickoff_time
     roll["n_fixtures_seen"] = g.cumcount() + 1
 
@@ -152,7 +162,7 @@ def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.Dat
         return sm.get(stat, sm.get("default", 540.0)) / 90
 
     out = pd.DataFrame(index=d.index)
-    for c in [c for c in feats if c.startswith(("mins_l", "apps_l", "starts_l", "n_l"))]:
+    for c in [c for c in feats if c.startswith(("mins_l", "apps_l", "starts_l", "n_l", "ptsmatch_", "fpl_form"))]:
         out[c] = feats[c]
     for s in cfg.rate_stats:
         prior = d.position.map(priors[s]).astype(float) if s in priors else 0.0
