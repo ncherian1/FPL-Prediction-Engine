@@ -187,6 +187,15 @@ def build_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> pd.Dat
     for p in POSITIONS:
         out[f"pos_{p}"] = (d.position == p).astype(float)
     out["dgw"] = d.groupby(["player_id", "gw_key"]).fixture_id.transform("count").gt(1).astype(float)
+    # squad fixtures at his CURRENT club before this gameweek (new signings start at 0); counted per gameweek
+    # block so a double gameweek's second match doesn't count the first
+    blk = d.groupby(["player_id", "team_id", "gw_key"], sort=False).size().rename("n").reset_index()
+    blk = blk.sort_values(["player_id", "team_id", "gw_key"])
+    blk["prior"] = blk.groupby(["player_id", "team_id"]).n.cumsum() - blk.n
+    out["fixtures_at_club"] = d[["player_id", "team_id", "gw_key"]].merge(
+        blk, on=["player_id", "team_id", "gw_key"], how="left").prior.to_numpy()
+    out["new_at_club"] = (out.fixtures_at_club < 5).astype(float)
+    out["gw_of_season"] = d.gameweek.astype(float)
 
     ids = d[["player_id", "fixture_id", "season", "gameweek", "gw_key", "deadline", "kickoff_time", "team_id",
              "opponent_team_id", "position"]]
