@@ -25,7 +25,10 @@ docker compose up -d --wait       # local Postgres 16 (or point DATABASE_URL at 
 | `sync-pitchapi [--season 2025-26] [--limit N]` | PitchAPI matches, shots, player stats, lineups and advanced stats | daily (needs key) |
 | `strikerapi-probe [--year 2025]` | about 3 credits: checks StrikerAPI coverage | manual (needs key) |
 | `strikerapi-shots ARS LIV … [--year]` | 10 credits per team: shot maps with xG | manual (needs key) |
-| `daily` | runs everything above that is scheduled daily, then writes reports | daily |
+| `match-players` | link PitchAPI teams, fixtures and players to FPL IDs; fill in defensive stats | daily (part of `daily`) |
+| `seed-scoring-rules` | store FPL scoring rules for every season | once |
+| `predict [--gameweek N] [--sims N]` | predict the next gameweek with the component model and save the run | daily (part of `daily`) |
+| `daily` | runs everything above that is scheduled daily, then predicts and writes reports | daily |
 | `report` | freshness by job, % non-null per stat per season, consolidated current-player table | any time |
 
 `.github/workflows/ingest.yml` runs `sync-fpl` every 6h and `daily` once a day once the `DATABASE_URL` repo secret is set.
@@ -67,6 +70,18 @@ Rules this layout enforces:
 - **NULL means unknown, 0 means an observed zero.** A stat a season doesn't publish stays NULL. An FPL player with no injury flag gets `availability_probability = NULL`, not 100%.
 - **No overwriting of history.** Prices and availability are append-only, and raw payloads are archived.
 - **Retries and rate limits.** Every request goes through `fpl_engine/http.py`: retries with exponential backoff (respecting `Retry-After`), per-provider rate limiting, and TTL caching for immutable historical files.
+
+## Prediction model
+
+The production model is the **component model** (`fpl_engine/models/simulate.py`). For each player-fixture it simulates 10,000 matches, scores each draw with the season's rules, and sums double gameweeks. The components are:
+- **minutes** (`minutes.py`)
+- **team strength and fixture difficulty** (`team_strength.py`)
+- **goals and assists** (`attacking.py`)
+- **defensive contributions, saves, cards and bonus** (`defensive.py`)
+
+Live predictions (`fpl_engine/live.py`) apply FPL's injury flags and penalty-taker order. Each run is saved, append-only, in `predictions.model_runs` and `predictions.player_fixture_predictions`; `predictions.v_latest_gameweek` shows the latest run per gameweek.
+
+The model was designed step by step in `notebooks/00`–`08`, with each design decision recorded at the end of its notebook. In the rolling backtest (2024-25 onwards, rotation-relevant players) it beats a direct LightGBM model and every baseline: each gameweek its top-20 picks averaged 4.96 actual points, against 4.80 for LightGBM and 3.92 for FPL form.
 
 ## Tests
 

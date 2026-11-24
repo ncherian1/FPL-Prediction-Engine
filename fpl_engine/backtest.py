@@ -68,9 +68,9 @@ def to_gameweeks(preds: pd.DataFrame) -> pd.DataFrame:
     """Sum fixtures into player-gameweeks (double gameweek = both matches)."""
     agg = {"xpts": "sum", "y_points": "sum", "y_minutes": "sum", "rotation_relevant": "max", "position": "first",
            "price": "first"}
-    for c in ("p_return", "p_haul"):
+    for c in ("p_return", "p_haul", "p10", "p50", "p90"):
         if c in preds:
-            agg[c] = "max"   # placeholder for single-fixture GWs; DGW probabilities come from the simulator later
+            agg[c] = "first"     # already gameweek-level (the simulator sums a double gameweek's draws)
     return preds.groupby(["model", "season", "gameweek", "gw_key", "player_id"], as_index=False).agg(agg)
 
 

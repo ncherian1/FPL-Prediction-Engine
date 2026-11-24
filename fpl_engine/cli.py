@@ -85,6 +85,8 @@ def cmd_daily(conn, args):
         matching.run(conn, write=True)          # link any new players / fixtures
         matching.build_defensive(conn)
         matching.build_adjustments(conn)
+    from . import live
+    live.predict_gameweek(conn)
     paths = reports.write_all(conn)
     print("reports:", *paths.values(), sep="\n  ")
 
@@ -121,6 +123,14 @@ def cmd_match_players(conn, args):
     print(f"review list ({len(review)}):", out)
     print("defensive rows from PitchAPI:", matching.build_defensive(conn))
     matching.build_adjustments(conn)
+
+
+def cmd_predict(conn, args):
+    from . import live
+    out = live.predict_gameweek(conn, gameweek=args.gameweek, n_sims=args.sims)
+    top = out.groupby("player_id").agg(xpts=("gw_xpts", "first"), p_haul=("p_haul", "first")).nlargest(15, "xpts")
+    names = dict(conn.execute("SELECT player_id, web_name FROM core.players").fetchall())
+    print(top.assign(name=top.index.map(names)).round(2).to_string())
 
 
 def cmd_report(conn, args):
@@ -176,6 +186,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("daily", help="scheduled daily job").set_defaults(fn=cmd_daily)
     sub.add_parser("backfill", help="one-off full historical load (keyless sources)").set_defaults(fn=cmd_backfill)
     sub.add_parser("report", help="freshness + missing-field reports").set_defaults(fn=cmd_report)
+    s = sub.add_parser("predict", help="predict the next (or given) gameweek and store the run")
+    s.add_argument("--gameweek", type=int)
+    s.add_argument("--sims", type=int, default=10_000)
+    s.set_defaults(fn=cmd_predict)
     sub.add_parser("match-players", help="link PitchAPI teams/fixtures/players to FPL IDs").set_defaults(
         fn=cmd_match_players)
     sub.add_parser("seed-scoring-rules", help="store FPL scoring rules for every season").set_defaults(
